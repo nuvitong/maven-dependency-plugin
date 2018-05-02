@@ -18,6 +18,13 @@ package org.apache.maven.plugins.dependency.fromDependencies;
  * specific language governing permissions and limitations
  * under the License.
  */
+/*
+ * Change by Tobias Lang 2018-05-02: 
+ * If option -DincludeParents=true is set, 
+ * not only the parents will be included within 
+ * {@code getDependencySets()} but also managed dependencies
+ * with scope {@code import} and their parents.
+ */
 
 import java.io.File;
 import java.util.ArrayList;
@@ -26,7 +33,9 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
+import org.apache.maven.model.Dependency;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -40,6 +49,7 @@ import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.shared.artifact.ArtifactCoordinate;
+import org.apache.maven.shared.artifact.DefaultArtifactCoordinate;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactIdFilter;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
@@ -49,10 +59,10 @@ import org.apache.maven.shared.artifact.filter.collection.GroupIdFilter;
 import org.apache.maven.shared.artifact.filter.collection.ProjectTransitivityFilter;
 import org.apache.maven.shared.artifact.filter.collection.ScopeFilter;
 import org.apache.maven.shared.artifact.filter.collection.TypeFilter;
-import org.apache.maven.shared.repository.RepositoryManager;
 import org.apache.maven.shared.artifact.resolve.ArtifactResolver;
 import org.apache.maven.shared.artifact.resolve.ArtifactResolverException;
 import org.apache.maven.shared.dependencies.resolve.DependencyResolver;
+import org.apache.maven.shared.repository.RepositoryManager;
 import org.codehaus.plexus.util.StringUtils;
 
 /**
@@ -308,13 +318,28 @@ public abstract class AbstractDependencyFilterMojo
             // add dependencies parents
             for ( Artifact dep : new ArrayList<Artifact>( artifacts ) )
             {
-                addParentArtifacts( buildProjectFromArtifact( dep ), artifacts );
+                MavenProject dependentProject = null;
+                try 
+                {
+                    dependentProject = buildProjectFromArtifact( dep );
+                }
+                catch ( MojoExecutionException e )
+                {
+                    getLog().warn( "MojoExecutionException thrown when building project from artifact." );
+                    getLog().warn( e.getMessage() );
+                }
+                
+                if ( null != dependentProject ) 
+                {
+                    addParentArtifacts( dependentProject, artifacts );
+                    addImportScopedDependencyAndItsParent( dependentProject , artifacts );
+                }
             }
 
             // add current project parent
             addParentArtifacts( getProject(), artifacts );
         }
-
+        
         // perform filtering
         try
         {
@@ -372,12 +397,91 @@ public abstract class AbstractDependencyFilterMojo
                     artifactResolver.resolveArtifact( buildingRequest, project.getArtifact() ).getArtifact();
 
                 artifacts.add( resolvedArtifact );
+                
+                addImportScopedDependencyAndItsParent( buildProjectFromArtifact( resolvedArtifact ), artifacts );
             }
             catch ( ArtifactResolverException e )
             {
                 throw new MojoExecutionException( e.getMessage(), e );
+            } 
+            catch ( MojoExecutionException e )
+            {
+                getLog().error( e );
             }
         }
+    }
+    
+    /**
+     * @param project
+     * @param artifacts
+     * @throws MojoExecutionException
+     */
+    private void addImportScopedDependencyAndItsParent( MavenProject project, final Set<Artifact> artifacts )
+            throws MojoExecutionException 
+    {
+        if ( null != project.getOriginalModel().getDependencyManagement() )
+        {
+            for ( Dependency dependency : project.getOriginalModel().getDependencyManagement().getDependencies() ) 
+            {
+                if ( "import".equals( dependency.getScope() ) ) 
+                {
+                    getLog().debug( String.format( "imported dependency: %s:%s:%s:%s", dependency.getGroupId(), 
+                            dependency.getArtifactId(), dependency.getVersion(), dependency.getScope() ) );
+                    ProjectBuildingRequest buildingRequest = newResolveArtifactProjectBuildingRequest();
+    
+                    try 
+                    {
+                        ArtifactCoordinate coord = mapToArtifactCoordinate( dependency, project );
+                        
+                        Artifact resolvedArtifact = 
+                                artifactResolver.resolveArtifact( buildingRequest, coord ).getArtifact();
+    
+                        addParentArtifacts( buildProjectFromArtifact( resolvedArtifact ), artifacts );
+                        artifacts.add( resolvedArtifact );
+                    } 
+                    catch ( ArtifactResolverException e ) 
+                    {
+                        getLog().warn( "Artifact could not be resolved, because of exception. Ignore.", e );
+                    }
+                }
+            }
+        }
+    }
+
+    private ArtifactCoordinate mapToArtifactCoordinate( Dependency dependency, MavenProject project ) 
+    {
+        DefaultArtifactCoordinate coord = new DefaultArtifactCoordinate();
+        coord.setGroupId( dependency.getGroupId() );
+        coord.setArtifactId( dependency.getArtifactId() );
+        coord.setClassifier( dependency.getClassifier() );
+        coord.setVersion( resolveVersion( dependency.getVersion(), project ) );
+        coord.setExtension( new DefaultArtifactHandler( dependency.getType() ).getExtension() );
+        
+        return coord;
+    }
+    
+    private String resolveVersion( String dependencyVersion, MavenProject project ) 
+    {
+        String resolvedVersion = dependencyVersion;
+        
+        if ( null != dependencyVersion && dependencyVersion.startsWith( "${" ) ) 
+        {
+            String propertyName = dependencyVersion.substring( 2, dependencyVersion.length() - 1 );
+            if ( "project.version".equals( propertyName ) )
+            {
+                resolvedVersion = project.getVersion();
+            }
+            else if ( project.getProperties().containsKey( propertyName ) )
+            {
+                resolvedVersion = project.getProperties().getProperty( propertyName );
+            }
+        }
+        else
+        {
+            resolvedVersion = dependencyVersion;
+        }
+        
+        return resolvedVersion;
     }
 
     /**
