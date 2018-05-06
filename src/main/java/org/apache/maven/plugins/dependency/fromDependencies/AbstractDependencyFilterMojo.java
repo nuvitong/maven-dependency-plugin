@@ -18,13 +18,6 @@ package org.apache.maven.plugins.dependency.fromDependencies;
  * specific language governing permissions and limitations
  * under the License.
  */
-/*
- * Change by Tobias Lang 2018-05-02: 
- * If option -DincludeParents=true is set, 
- * not only the parents will be included within 
- * {@code getDependencySets()} but also managed dependencies
- * with scope {@code import} and their parents.
- */
 
 import java.io.File;
 import java.util.ArrayList;
@@ -67,8 +60,15 @@ import org.codehaus.plexus.util.StringUtils;
 
 /**
  * Class that encapsulates the plugin parameters, and contains methods that handle dependency filtering
+ * 
+ * Change by Tobias Lang 2018-05-02: 
+ * If option -DincludeParents=true is set, 
+ * not only the parents will be included within 
+ * {@code getDependencySets()} but also managed dependencies
+ * with scope {@code import} and their parents.
  *
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
+ * @author <a href="mailto:nuvito@improvisare.de">Tobias Lang</a>
  * @see org.apache.maven.plugins.dependency.AbstractDependencyMojo
  */
 public abstract class AbstractDependencyFilterMojo
